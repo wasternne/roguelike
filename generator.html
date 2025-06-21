@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Dungeon Generator</title>
+    <style>
+        body {
+            background-color: #000;
+        }
+    </style>
+</head>
+<body>
+<pre id="dungeon-preview"/>
+<script>
+    const EL_PREVIEW = document.getElementById("dungeon-preview");
+
+    const TILE = {
+        UNKNOWN:    { id: 0, symbol: ' ', color: "#000", oneHotVector: [1, 0, 0, 0], },
+        WALL:       { id: 0, symbol: '#', color: "#666", oneHotVector: [0, 1, 0, 0], },
+        FLOOR:      { id: 0, symbol: '.', color: "#999", oneHotVector: [0, 0, 1, 0], },
+        DOOR:       { id: 0, symbol: '+', color: "#963", oneHotVector: [0, 0, 0, 1], },
+    }
+
+    const DIRECTION_4 = {
+        NORTH:  { dx: 0, dy: -1 },
+        SOUTH:  { dx: 0, dy: +1 },
+        WEST:   { dx: -1, dy: 0 },
+        EAST:   { dx: +1, dy: 0 },
+    }
+
+    const DIRECTION_8 = {
+        NORTH:  { dx: 0, dy: -1 },
+        SOUTH:  { dx: 0, dy: +1 },
+        WEST:   { dx: -1, dy: 0 },
+        EAST:   { dx: +1, dy: 0 },
+        NORTH_EAST: { dx: +1, dy: -1 },
+        NORTH_WEST: { dx: -1, dy: -1 },
+        SOUTH_EAST: { dx: +1, dy: +1 },
+        SOUTH_WEST: { dx: -1, dy: +1 },
+    }
+
+    const ROOM = {
+        NORMAL: {
+            maxRoomSpace: 35,
+            maxRoomLength: 7,
+            padding: 2, // How much free space the seed needs to have around itself.
+        },
+        TUNNEL_AREA: {
+            maxRoomSpace: 25,
+            maxRoomLength: 5,
+            padding: 1,
+        },
+    }
+
+    class DungeonLevel {
+        #tiles;
+        #rooms;
+        width;
+        height;
+
+        constructor(width, height, roomCount) {
+            this.width = width;
+            this.height = height;
+            this.#initRooms(roomCount);
+            this.#growRooms();
+            this.#addTunnelAreas();
+            this.#removeExcessTunnelAreas();
+            this.#findNeighbours(); // Unneeded, but just in case.
+            this.#initTiles();
+            this.#digRooms();
+            this.#digDoors();
+            this.#digTunnels();
+        }
+
+        #initTiles() {
+            this.#tiles = [];
+            for (let x = 0; x < this.width; x++) {
+                this.#tiles[x] = [];
+                for (let y = 0; y < this.height; y++) {
+                    this.#tiles[x][y] = TILE.WALL;
+                }
+            }
+        }
+
+        #digRooms() {
+            for (const r of this.#rooms) {
+                if (r.type === ROOM.TUNNEL_AREA) continue;
+                this.#fill(r, TILE.FLOOR);
+            }
+        }
+
+        #digDoors() {
+            for (const r of this.#rooms) {
+                r.doors = [];
+            }
+            for (const r of this.#rooms) {
+                cycleNeighbours: for (const n of r.neighbours) {
+                    const intersection = this.#intersectionWithWalls(r, n);
+                    const potentialDoors = [];
+                    for (let x = intersection.x1; x <= intersection.x2; x++) {
+                        for (let y = intersection.y1; y <= intersection.y2; y++) {
+                            if (x % 2 + y % 2 !== 1) continue;
+                            if (this.#tiles[x][y] === TILE.DOOR) {
+                                // The neighbour already has dug the door to this room.
+                                continue cycleNeighbours;
+                            }
+                            potentialDoors.push({ x: x, y: y, });
+                        }
+                    }
+                    const door = potentialDoors[Math.floor(Math.random() * potentialDoors.length)];
+                    r.doors.push(door);
+                    n.doors.push(door);
+                    let betweenTunnels = r.type === ROOM.TUNNEL_AREA && n.type === ROOM.TUNNEL_AREA;
+                    this.#tiles[door.x][door.y] = betweenTunnels ? TILE.FLOOR : TILE.DOOR;
+                }
+            }
+        }
+
+        #digTunnels() {
+            for (const r of this.#rooms) {
+                if (r.type === ROOM.TUNNEL_AREA) this.#digAreaTunnels(r);
+            }
+        }
+
+        #digAreaTunnels(tunnelArea) {
+            const topDoors = [];
+            const bottomDoors = [];
+            const leftDoors = [];
+            const rightDoors = [];
+            const xs = [];
+            const ys = [];
+            for (const door of tunnelArea.doors) {
+                if (door.y === tunnelArea.y1 - 1) {
+                    xs.push(door.x);
+                    topDoors.push(door);
+                } else if (door.y === tunnelArea.y2 + 1) {
+                    xs.push(door.x);
+                    bottomDoors.push(door);
+                } else if (door.x === tunnelArea.x1 - 1) {
+                    ys.push(door.y);
+                    leftDoors.push(door);
+                } else if (door.x === tunnelArea.x2 + 1) {
+                    ys.push(door.y);
+                    rightDoors.push(door);
+                } else throw "An out-of-place door found!";
+            }
+            if (xs.length === 0) {
+                // If there are no vertical neighbours:
+                if (leftDoors.length > 0 && rightDoors.length === 0) {
+                    // If there are only left neighbours, build a tunnel at the left edge.
+                    xs.push(tunnelArea.x1);
+                }
+                else if (rightDoors.length > 0 && leftDoors.length === 0) {
+                    // If there are only right neighbours, build a tunnel at the right edge.
+                    xs.push(tunnelArea.x2);
+                }
+                else {
+                    // If there are both, build a tunnel with a vertical segment somewhere between.
+                    const areaWidth = tunnelArea.x2 - tunnelArea.x1 + 1;
+                    xs.push(tunnelArea.x1 + Math.floor(Math.random() * areaWidth));
+                }
+            }
+            if (ys.length === 0) {
+                // If there are no horizontal neighbours:
+                if (topDoors.length > 0 && bottomDoors.length === 0) {
+                    // If there are only top neighbours, build a tunnel at the top edge.
+                    ys.push(tunnelArea.y1);
+                }
+                else if (bottomDoors.length > 0 && topDoors.length === 0) {
+                    // If there are only bottom neighbours, build a tunnel at the bottom edge.
+                    ys.push(tunnelArea.y2);
+                }
+                else {
+                    // If there are both, build a tunnel with a horizontal segment somewhere between.
+                    const areaHeight = tunnelArea.y2 - tunnelArea.y1 + 1;
+                    ys.push(tunnelArea.y1 + Math.floor(Math.random() * areaHeight));
+                }
+            }
+            const crossSection = {
+                x1: Math.min(...xs),
+                y1: Math.min(...ys),
+                x2: Math.max(...xs),
+                y2: Math.max(...ys),
+            };
+            this.#fill(crossSection, TILE.FLOOR);
+            for (const door of tunnelArea.doors) {
+                if (door.y === tunnelArea.y1 - 1) {
+                    this.#fill({
+                        x1: door.x, y1: door.y + 1,
+                        x2: door.x, y2: crossSection.y1 - 1,
+                    }, TILE.FLOOR);
+                } else if (door.y === tunnelArea.y2 + 1) {
+                    this.#fill({
+                        x1: door.x, y1: crossSection.y2 + 1,
+                        x2: door.x, y2: door.y - 1,
+                    }, TILE.FLOOR);
+                } else if (door.x === tunnelArea.x1 - 1) {
+                    this.#fill({
+                        x1: door.x + 1, y1: door.y,
+                        x2: crossSection.x1 - 1, y2: door.y,
+                    }, TILE.FLOOR);
+                } else if (door.x === tunnelArea.x2 + 1) {
+                    this.#fill({
+                        x1: crossSection.x2 + 1, y1: door.y,
+                        x2: door.x - 1, y2: door.y,
+                    }, TILE.FLOOR);
+                } else throw "An out-of-place door found!";
+            }
+        }
+
+        #fill(rect, tile) {
+            for (let x = rect.x1; x <= rect.x2; x++) {
+                for (let y = rect.y1; y <= rect.y2; y++) {
+                    this.#tiles[x][y] = tile;
+                }
+            }
+        }
+
+        #initRooms(roomCount) {
+            this.#rooms = [];
+            const potentialSeeds = this.#potentialSeeds(ROOM.NORMAL);
+            for (let i = 0; i < roomCount; i++) {
+                if (potentialSeeds.length === 0) throw "Not enough space for the room seeds!";
+                const index = Math.floor(Math.random() * potentialSeeds.length);
+                const seed = potentialSeeds[index];
+                this.#rooms.push({ seed: seed
+                    , x1: seed.x - 1, y1: seed.y - 1
+                    , x2: seed.x + 1, y2: seed.y + 1
+                    , type: ROOM.NORMAL
+                });
+                // Remove the seed and its neighbours, so that the rooms are packed not too tight.
+                const seedsToRemove = [];
+                for (const s of potentialSeeds) {
+                    let dx = s.x - seed.x;
+                    let dy = s.y - seed.y;
+                    if (Math.abs(dx) <= 2 && Math.abs(dy) <= 2) seedsToRemove.push(s);
+                }
+                for (const s of seedsToRemove) {
+                    potentialSeeds.splice(potentialSeeds.indexOf(s), 1);
+                }
+            }
+        }
+
+        #findNeighbours() {
+            for (const rA of this.#rooms) {
+                rA.neighbours = [];
+                for (const rB of this.#rooms) {
+                    const intersection = this.#intersectionWithWalls(rA, rB);
+                    if (intersection === null) continue; // Rooms don't touch.
+                    if (this.#roomSpace(intersection) === 1) continue; // Rooms touch with corners.
+                    rA.neighbours.push(rB);
+                }
+            }
+        }
+
+        #roomSpace(room) {
+            let x = room.x2 - room.x1 + 1;
+            let y = room.y2 - room.y1 + 1;
+            return x * y;
+        }
+
+        #intersectionWithWalls(roomA, roomB) {
+            if (roomA === roomB) return null;
+            const x1 = Math.max(roomA.x1 - 1, roomB.x1 - 1);
+            const x2 = Math.min(roomA.x2 + 1, roomB.x2 + 1);
+            const y1 = Math.max(roomA.y1 - 1, roomB.y1 - 1);
+            const y2 = Math.min(roomA.y2 + 1, roomB.y2 + 1);
+            if (x1 > x2 || y1 > y2) return null;
+            return { x1: x1, y1: y1, x2: x2, y2: y2 };
+        }
+
+        #potentialSeeds(roomType) {
+            const result = [];
+            // A room seed can appear only on even coordinates.
+            let yMin = roomType.padding;
+            let yMax = this.height - roomType.padding - 1;
+            let xMin = roomType.padding;
+            let xMax = this.width - roomType.padding - 1;
+            for (let y = yMin; y <= yMax; y += 2) {
+                addingSeeds: for (let x = xMin; x <= xMax; x += 2) {
+                    for (const room of this.#rooms) {
+                        if (room.x1 - 1 <= x && room.x2 + 1 >= x
+                            && room.y1 - 1 <= y && room.y2 + 1 >= y) {
+                            continue addingSeeds;
+                        }
+                    }
+                    result.push({ x: x, y: y });
+                }
+            }
+            return result;
+        }
+
+        #addTunnelArea() {
+            const potentialSeeds = this.#potentialSeeds(ROOM.TUNNEL_AREA);
+            if (potentialSeeds.length === 0) return null;
+            const seed = potentialSeeds[Math.floor(Math.random() * potentialSeeds.length)];
+            const room = { seed: seed
+                , x1: seed.x, y1: seed.y
+                , x2: seed.x, y2: seed.y
+                , type: ROOM.TUNNEL_AREA
+            };
+            this.#rooms.push(room);
+            let grew;
+            do {
+                grew = this.#tryGrowRoom(room, 9);
+            } while (grew);
+        }
+
+        #addTunnelAreas() {
+            let componentCount = this.#updateConnectivityGroups();
+            while (componentCount > 1) {
+                const tunnelArea = this.#addTunnelArea();
+                if (tunnelArea === null) {
+                    throw "The map is not connected yet, but can't add a new tunnel area!";
+                }
+                componentCount = this.#updateConnectivityGroups();
+            }
+        }
+
+        #tryRemoveExcessTunnelArea() {
+            const shuffledRooms = DungeonLevel.#shuffle([...this.#rooms]);
+            for (let i = 0; i < this.#rooms.length; i++) {
+                let room = shuffledRooms[i];
+                if (room.type !== ROOM.TUNNEL_AREA) continue;
+                let newConnectivity = this.#updateConnectivityGroups(room);
+                if (newConnectivity === 1) {
+                    this.#rooms.splice(this.#rooms.indexOf(room), 1);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        #removeExcessTunnelAreas() {
+            while (this.#tryRemoveExcessTunnelArea());
+            // Restoring the grouping intentionally corrupted during the #tryRemoveExcessTunnelArea().
+            this.#updateConnectivityGroups();
+        }
+
+        static #shuffle(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1)); // random index from 0 to i
+                [array[i], array[j]] = [array[j], array[i]];   // swap elements
+            }
+            return array;
+        }
+
+        #updateConnectivityGroups(exclude = null) {
+            this.#findNeighbours();
+            const groupIDs = new Set();
+            let i = 0;
+            for (const r of this.#rooms) {
+                if (r === exclude) continue;
+                r.connectivityGroup = i;
+                groupIDs.add(i);
+                i ++;
+            }
+            for (const r of this.#rooms) {
+                if (r === exclude) continue;
+                for (const n of r.neighbours) {
+                    if (n === exclude) continue;
+                    const rg = r.connectivityGroup;
+                    const ng = n.connectivityGroup;
+                    if (rg === ng) continue;
+                    const g1 = Math.min(rg, ng);
+                    const g2 = Math.max(rg, ng);
+                    for (const r2 of this.#rooms) {
+                        if (r2.connectivityGroup === g2) {
+                            r2.connectivityGroup = g1;
+                        }
+                    }
+                    groupIDs.delete(g2);
+                }
+            }
+            return groupIDs.size;
+        }
+
+        #canGrowRoom(room, direction) {
+            const x1new = room.x1 - (direction === DIRECTION_4.WEST ? 2 : 0);
+            if (x1new <= 0) return false;
+            const y1new = room.y1 - (direction === DIRECTION_4.NORTH ? 2 : 0);
+            if (y1new <= 0) return false;
+            const x2new = room.x2 + (direction === DIRECTION_4.EAST ? 2 : 0);
+            if (x2new >= this.width - 1) return false;
+            const y2new = room.y2 + (direction === DIRECTION_4.SOUTH ? 2 : 0);
+            if (y2new >= this.height - 1) return false;
+            for (const r of this.#rooms) {
+                if (r === room) continue;
+                if (r.x2 < x1new) continue;
+                if (r.y2 < y1new) continue;
+                if (r.x1 > x2new) continue;
+                if (r.y1 > y2new) continue;
+                return false;
+            }
+            const width = x2new - x1new + 1;
+            if (width > room.type.maxRoomLength) return false;
+            const height = y2new - y1new + 1;
+            if (height > room.type.maxRoomLength) return false;
+            return width * height <= room.type.maxRoomSpace;
+        }
+
+        #tryGrowRoom(room) {
+            const possibleDirections = [];
+            for (const d of Object.values(DIRECTION_4)) {
+                if (this.#canGrowRoom(room, d)) {
+                    possibleDirections.push(d);
+                }
+            }
+            if (possibleDirections.length === 0) return false;
+            const d = possibleDirections[Math.floor(Math.random() * possibleDirections.length)];
+            room.x1 -= d === DIRECTION_4.WEST ? 2 : 0;
+            room.y1 -= d === DIRECTION_4.NORTH ? 2 : 0;
+            room.x2 += d === DIRECTION_4.EAST ? 2 : 0;
+            room.y2 += d === DIRECTION_4.SOUTH ? 2 : 0;
+            return true;
+        }
+
+        #growRooms() {
+            let grew;
+            do {
+                grew = false;
+                for (const room of this.#rooms) {
+                    grew ||= this.#tryGrowRoom(room);
+                }
+            } while (grew);
+        }
+
+        preview() {
+            let result = "";
+            for (let y = 0; y < this.height; y++) {
+                for (let x = 0; x < this.width; x++) {
+                    let ch = ' ';
+                    for (const d of Object.values(DIRECTION_8)) {
+                        if (x + d.dx >= 0 && x + d.dx < this.width
+                            && y + d.dy >= 0 && y + d.dy < this.height
+                            && this.#tiles[x + d.dx][y + d.dy] !== TILE.WALL) {
+                            ch = `<span style="color: ${this.#tiles[x][y].color}">${this.#tiles[x][y].symbol}</span>`;
+                            break;
+                        }
+                    }
+                    result += ch;
+                }
+                result += '\n';
+            }
+            return result;
+        }
+    }
+
+    let dungeonLevel = new DungeonLevel(24, 32, 5);
+    EL_PREVIEW.innerHTML = dungeonLevel.preview();
+    setInterval(() => {
+        let dungeonLevel = new DungeonLevel(24, 32, 5);
+        EL_PREVIEW.innerHTML = dungeonLevel.preview();
+    }, 500);
+</script>
+</body>
+</html>
