@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
     <title>Dungeon Generator</title>
     <style>
         body {
@@ -15,10 +16,11 @@
     const EL_PREVIEW = document.getElementById("dungeon-preview");
 
     const TILE = {
-        UNKNOWN:    { id: 0, symbol: ' ', color: "#000", oneHotVector: [1, 0, 0, 0], },
-        WALL:       { id: 0, symbol: '#', color: "#666", oneHotVector: [0, 1, 0, 0], },
-        FLOOR:      { id: 0, symbol: '.', color: "#999", oneHotVector: [0, 0, 1, 0], },
-        DOOR:       { id: 0, symbol: '+', color: "#963", oneHotVector: [0, 0, 0, 1], },
+        UNKNOWN:    { id: 0, symbol: ' ', color: "#000", oneHotVector: [1, 0, 0, 0, 0], },
+        WALL:       { id: 0, symbol: '#', color: "#666", oneHotVector: [0, 1, 0, 0, 0], },
+        FLOOR:      { id: 0, symbol: '.', color: "#999", oneHotVector: [0, 0, 1, 0, 0], },
+        DOOR:       { id: 0, symbol: '+', color: "#963", oneHotVector: [0, 0, 0, 1, 0], },
+        SEED:       { id: 0, symbol: '*', color: "#999", oneHotVector: [0, 0, 0, 0, 1], },
     }
 
     const DIRECTION_4 = {
@@ -86,6 +88,7 @@
             for (const r of this.#rooms) {
                 if (r.type === ROOM.TUNNEL_AREA) continue;
                 this.#fill(r, TILE.FLOOR);
+                this.#tiles[r.seed.x][r.seed.y] = TILE.SEED;
             }
         }
 
