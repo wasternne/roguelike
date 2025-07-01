@@ -16,11 +16,13 @@
     const EL_PREVIEW = document.getElementById("dungeon-preview");
 
     const TILE = {
-        UNKNOWN:    { id: 0, symbol: ' ', color: "#000", oneHotVector: [1, 0, 0, 0, 0], },
-        WALL:       { id: 0, symbol: '#', color: "#666", oneHotVector: [0, 1, 0, 0, 0], },
-        FLOOR:      { id: 0, symbol: '.', color: "#999", oneHotVector: [0, 0, 1, 0, 0], },
-        DOOR:       { id: 0, symbol: '+', color: "#963", oneHotVector: [0, 0, 0, 1, 0], },
-        SEED:       { id: 0, symbol: '*', color: "#999", oneHotVector: [0, 0, 0, 0, 1], },
+        UNKNOWN:    { id: 0, symbol: ' ', color: "#000", oneHotVector: [1, 0, 0, 0, 0, 0, 0], },
+        WALL:       { id: 0, symbol: '#', color: "#666", oneHotVector: [0, 1, 0, 0, 0, 0, 0], },
+        FLOOR:      { id: 0, symbol: '.', color: "#999", oneHotVector: [0, 0, 1, 0, 0, 0, 0], },
+        DOOR:       { id: 0, symbol: '+', color: "#963", oneHotVector: [0, 0, 0, 1, 0, 0, 0], },
+        STAIR_UP:   { id: 0, symbol: '<', color: "#999", oneHotVector: [0, 0, 0, 0, 1, 0, 0], },
+        STAIR_DOWN: { id: 0, symbol: '>', color: "#999", oneHotVector: [0, 0, 0, 0, 0, 1, 0], },
+        SEED:       { id: 0, symbol: '*', color: "#999", oneHotVector: [0, 0, 0, 0, 0, 0, 1], },
     }
 
     const DIRECTION_4 = {
@@ -60,16 +62,17 @@
         width;
         height;
 
-        constructor(width, height, roomCount) {
+        constructor(width, height, roomCount, stairUp = null) {
             this.width = width;
             this.height = height;
-            this.#initRooms(roomCount);
+            this.#initRooms(roomCount, stairUp);
             this.#growRooms();
             this.#addTunnelAreas();
             this.#removeExcessTunnelAreas();
             this.#findNeighbours(); // Unneeded, but just in case.
             this.#initTiles();
             this.#digRooms();
+            this.#digStairs(stairUp);
             this.#digDoors();
             this.#digTunnels();
         }
@@ -219,13 +222,21 @@
             }
         }
 
-        #initRooms(roomCount) {
+        #initRooms(roomCount, stairUp = null) {
             this.#rooms = [];
             const potentialSeeds = this.#potentialSeeds(ROOM.NORMAL);
             for (let i = 0; i < roomCount; i++) {
                 if (potentialSeeds.length === 0) throw "Not enough space for the room seeds!";
-                const index = Math.floor(Math.random() * potentialSeeds.length);
-                const seed = potentialSeeds[index];
+                let seed;
+                if (i !== 0 || stairUp === null) {
+                    let index = Math.floor(Math.random() * potentialSeeds.length);
+                    seed = potentialSeeds[index];
+                } else {
+                    seed = potentialSeeds.find(s => {
+                        return s.x === stairUp.x && s.y === stairUp.y;
+                    });
+                    if (typeof seed === "undefined") throw "Stairs coordinates seem to be unacceptable!";
+                }
                 this.#rooms.push({ seed: seed
                     , x1: seed.x - 1, y1: seed.y - 1
                     , x2: seed.x + 1, y2: seed.y + 1
@@ -447,14 +458,63 @@
             }
             return result;
         }
+
+        #digStairs(stairUp = null) {
+            const roomUp = this.#digStairsUp(stairUp);
+            this.#digStairsDown(roomUp);
+        }
+
+        #digStairsUp(stairUp = null) {
+            let roomUp;
+            if (stairUp === null) {
+                roomUp = this.#rooms[Math.floor(Math.random() * this.#rooms.length)];
+            } else {
+                roomUp = this.#rooms.find(r => {
+                    return r.seed.x === stairUp.x && r.seed.y === stairUp.y;
+                });
+                if (typeof roomUp === "undefined") {
+                    throw "Can't find the room with the stairs up!";
+                }
+            }
+            const seedUp = roomUp.seed;
+            this.#tiles[seedUp.x][seedUp.y] = TILE.STAIR_UP;
+            return roomUp;
+        }
+
+        #digStairsDown(roomUp) {
+            let wave = new Set();
+            let nextWave = new Set();
+            nextWave.add(roomUp);
+            let i = 0;
+            do {
+                nextWave.forEach(r => {
+                    r.distance = i;
+                });
+                wave = nextWave;
+                nextWave = new Set();
+                wave.forEach(r => {
+                    r.neighbours.forEach(n => {
+                        if (typeof n.distance === "undefined") {
+                            nextWave.add(n);
+                        }
+                    });
+                });
+                i ++;
+            } while (nextWave.size > 0);
+            // There are no rooms at the distance i at this point
+            // Wave is the set of rooms at the maximum possible distance i - 1
+            const farRooms = Array.from(wave);
+            const seedDown = farRooms[Math.floor(Math.random() * farRooms.length)].seed;
+            this.#tiles[seedDown.x][seedDown.y] = TILE.STAIR_DOWN;
+        }
     }
 
-    let dungeonLevel = new DungeonLevel(24, 32, 5);
+    let dungeonLevel = new DungeonLevel(24, 32, 5, { x: 10, y: 10 });
     EL_PREVIEW.innerHTML = dungeonLevel.preview();
     setInterval(() => {
-        let dungeonLevel = new DungeonLevel(24, 32, 5);
+        let dungeonLevel = new DungeonLevel(24, 32, 5, { x: 10, y: 10 });
         EL_PREVIEW.innerHTML = dungeonLevel.preview();
-    }, 500);
+    }, 3000);
 </script>
 </body>
 </html>
